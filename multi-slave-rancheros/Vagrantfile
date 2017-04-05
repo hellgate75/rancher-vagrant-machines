@@ -1,0 +1,206 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+require_relative 'vagrant-local-shell-commands-plugin.rb'
+
+# To enable rsync folder share change to false
+RSYNC_FOLDER_DISABLED = false
+SYNCED_FOLDER_DISABLED = true
+NUMBER_OF_NODES=3
+VM_MEMORY = "4096"
+VM_CPUS = "2"
+VM_HOSTNAME = "rancheros-slave"
+VM_MAC_ADDRESSES = ["022999D56C05","022999D56C06","022999D56C07","022999D56C08","022999D56C09","022999D56C10"]
+VM_NAME = "rancheros-slave-0.9.0"
+VM_IP_ADDRESS_PREFIX = "192.168."
+VM_IP_ADDRESS_FROM = 50
+VM_IP_ADDRESS_SUFFIX = "111"
+#VM_DISK_SIZE_MB = "61440"
+VM_DISK_SIZE_MB = "81920"
+VM_PORT_BINDING = [[],[[5050,5050], [5051,5051]],[[5050,5050], [5051,5051]],[[5050,5050], [5051,5051]],[],[],[]]
+#LIST OF COUPLE IN-MACHINE -> EXPOSED  NUMERIC PORTS af follow:
+# [[guest_port, host_port], ....]
+#VM_DISK_DEFAULT_SIZE_MB = "61440"
+VM_DISK_DEFAULT_SIZE_MB="81920"
+VM_SYNCED_FOLDERS = []
+#Array including three string of remote label and local to sync path and protocol (rsync, nfs, sshfs, etc..) as follow :
+#[[local path, remote path, protocol], ....]
+# In order to enable the sshfs protocol on the guest machine type 'touch .sshfs_enabled' in the vagrant machine folder
+VM_DEFAULT_SYNCED_PROTOCOL="sshfs"
+
+# To enable rsync folder share change to false
+$rsync_folder_disabled = RSYNC_FOLDER_DISABLED or true
+$vagrant_folder_disabled = SYNCED_FOLDER_DISABLED or true
+$number_of_nodes = NUMBER_OF_NODES or 1
+$vm_mem = VM_MEMORY or "4096"
+$vb_gui = false
+$vm_cpus = VM_CPUS or "2"
+$host_name = VM_HOSTNAME or "rancheros-slave"
+$vm_macs = VM_MAC_ADDRESSES or ["022999D56C03"]
+$vm_name = VM_NAME or "rancheros-slave-0.9.0"
+$provider = "virtualbox"
+$ip_address = VM_IP_ADDRESS_PREFIX or "192.168.50."
+$ip_address_from = VM_IP_ADDRESS_FROM or 111
+$ip_address_suffix = VM_IP_ADDRESS_SUFFIX or "110"
+$disk_capacity = VM_DISK_SIZE_MB or "40960"
+$curent_disk_capacity = VM_DISK_DEFAULT_SIZE_MB or "40960"
+$disk_base_name = "box-disk1"
+$vm_binding = VM_PORT_BINDING or [[]]
+# This variable is in the format [ # This variable is in the format [ [guest1, host1], .... ] by content of integers
+# For any machine we have a multiply of these arrays as follow :
+# [ [[guest1a, host1a], ...], [[guest1b, host1b], ...], ... ]
+$vm_synced_folders = VM_SYNCED_FOLDERS or []
+#Array including three string of remote label and local to sync path and protocol (rsync, nfs, sshfs, etc..) as follow :
+#[[local path, remote path, protocol], ....]
+# In order to enable the sshfs protocol on the guest machine type 'touch .sshfs_enabled' in the vagrant machine folder
+$default_synced_folder_protocol = VM_DEFAULT_SYNCED_PROTOCOL or "rsync"
+
+# All Vagrant configuration is done below. The "2" in Vagrant.configure
+# configures the configuration version (we support older styles for
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+Vagrant.configure("2") do |config|
+  config.vm.box   = "rancheros-v0.9.0-multi"
+
+  (1..$number_of_nodes).each do |machineIndex|
+
+    config.vm.base_mac = $vm_macs[machineIndex-1]
+    config.ssh.insert_key = true
+    config.ssh.username="rancher"
+    config.vm.synced_folder ".", "/vagrant", disabled: $vagrant_folder_disabled
+    config.vm.boot_timeout=600
+    config.vm.box_download_insecure=true
+    config.ssh.private_key_path = ["~/.ssh/id_rsa", "~/.vagrant.d/insecure_private_key"]
+
+    hostname = ($host_name + "-%02d") % machineIndex
+    vmname = ($vm_name + "-%02d") % machineIndex
+
+    config.vm.define vmname do |node|
+      node.vm.provider $provider do |vb|
+        vb.memory = $vm_mem
+        vb.cpus = $vm_cpus
+        vb.gui = $vb_gui
+        vb.name = vmname
+      end
+
+      # Before we check about the current disk capacity the is different from the default one
+      if ($disk_capacity != $curent_disk_capacity) then
+        config.vm.provider $provider do |v|
+          # 0. We define the current and two temporary disks
+          base_path = file_to_disk = File.realpath( "/" + ENV['HOME'] + "/VirtualBox VMs/" ).to_s
+          vmdk_path_skel = base_path + "/" + vmname + "/" + $disk_base_name
+          vmdk_path = vmdk_path_skel + ".vmdk"
+          if File.exist?(file_to_disk) then
+            tmp1 = vmdk_path_skel + ".cloned.vdi"
+
+            # Then on the pre-boot time (machine is down) we are going to :
+            # 1. clone the vmdk in vdi (actually we cannot resize a vmdk with VBox)
+            # 2. resize the cloned vdi
+            # 3. clone the vdi in a temporary new resized vmdk
+            if File.exist?(tmp1) then
+              v.customize "pre-boot", ["closemedium", "disk", tmp1, "--delete"]
+            end
+            if (File.exist?(tmp1) == false) then
+              v.customize "pre-boot", ["clonehd",  vmdk_path ,  tmp1, "--format", "VDI"]
+              v.customize "pre-boot", ["modifyhd", tmp1, "--resize", $disk_capacity]
+              v.customize "pre-boot", ["showmediuminfo", tmp1]
+              v.customize "pre-boot", ["clonehd",  tmp1,  vmdk_path, "--existing"]
+              v.customize "pre-boot", ["showmediuminfo", vmdk_path]
+              # 4. we remove the original and the vdi disks and rename the
+              #    temporary vmdk with the original disk name and the machine
+              #    boot can proceed normally with a resized disk
+              v.customize "pre-boot", ["closemedium", "disk", tmp1, "--delete"]
+            end
+          else
+            raise "unable to locate file to increase capacity"
+          end
+        end
+      end
+
+      ip = $ip_address + "#{machineIndex+$ip_address_from}." + $ip_address_suffix
+      mask = $ip_address + "#{machineIndex+$ip_address_from}.0"
+      node.vm.network "private_network", ip: ip, :adapter => 2
+      node.vm.hostname = hostname
+
+      config.vm.provision "shell", run: "always", inline: <<-SHELL
+            if ! [ -z "$(ifconfig -a | grep docker1)" ]; then
+              echo "Bridged network existing ... Romoving!!"
+              sudo docker network remove shared_nw
+            fi
+
+            echo "Removing previous ip from private network"
+            sudo ip addr del $(ifconfig eth1 | grep 'inet '| sed 's/inet //g'| awk 'BEGIN {FS=OFS=" "}{print $1}')/24 dev eth1
+            echo "Creating docker1 bridged network"
+            sudo docker network create \
+                      --driver bridge \
+                      --subnet=#{mask}/24 \
+                      --gateway=#{ip} \
+                      --opt "com.docker.network.bridge.name"="docker1" \
+                      --opt "com.docker.network.bridge.enable_icc=true" \
+                      shared_nw
+
+            echo "Configuring networking in RancherOS for docker1"
+            sudo ros config set rancher.network.interfaces.docker1.bridge true
+            sudo ros config set rancher.network.interfaces.docker1.dhcp true
+            echo "Restarting RancherOS network"
+            sudo system-docker restart network
+            echo "stopping NAT network ..."
+            sudo ifconfig eth0 down &
+        SHELL
+
+      unless Vagrant.has_plugin?('vagrant-hostmanager')
+        puts 'vagrant-hostmanager is not installed: no host management provided'
+      else
+        config.hostmanager.enabled = true
+        config.hostmanager.manage_host = true
+        config.hostmanager.ignore_private_ip = false
+        config.hostmanager.include_offline = true
+        config.hostmanager.aliases = ["#{hostname}.localdomain", "#{hostname}"]
+        #config.hostmanager.ip_resolver = proc do |vm, resolving_vm|
+        #   if hostname = (vm.ssh_info && vm.ssh_info[:host])
+        #       `vagrant ssh -c "hostname -I"`.split()[1]
+        #   end
+        # end
+      end
+
+      for single_binding in $vm_binding[machineIndex - 1]
+        config.vm.network :forwarded_port, guest: single_binding[0], host: single_binding[1], auto_correct: true
+      end
+
+      # Disabling compression because OS X has an ancient version of rsync installed.
+      # Add -z or remove rsync__args below if you have a newer version of rsync on your machine.
+      if $default_synced_folder_protocol == "sshfs" then
+        node.vm.synced_folder ".", "/opt/vagrant", type: $default_synced_folder_protocol,
+            sshfs_opts_append: "-o cache=no",
+            disabled: $rsync_folder_disabled
+      elsif $default_synced_folder_protocol == "rsync" then
+        node.vm.synced_folder ".", "/opt/vagrant", type: $default_synced_folder_protocol,
+            rsync__exclude: ".git/", rsync__args: ["--verbose", "--archive", "--delete", "--copy-links"],
+            disabled: $rsync_folder_disabled
+      end
+
+      if ($rsync_folder_disabled == false) then
+        for syncfolder in $vm_synced_folders
+          if $default_synced_folder_protocol == "sshfs" then
+            node.vm.synced_folder syncfolder[0], "/opt/" + syncfolder[1], type: syncfolder[3],
+                sshfs_opts_append: "-o cache=no",
+                disabled: $rsync_folder_disabled
+          elsif $default_synced_folder_protocol == "rsync" then
+            node.vm.synced_folder syncfolder[0], "/opt/" + syncfolder[1], type: syncfolder[3],
+                rsync__exclude: ".git/", rsync__args: ["--verbose", "--archive", "--delete", "--copy-links"],
+                disabled: $rsync_folder_disabled
+          end
+        end
+      end
+
+      # do NOT download the iso file from a webserver
+      #config.vbguest.no_remote = true
+      config.vm.guest = :linux
+
+      if Vagrant.has_plugin?("vagrant-vbguest") then
+        config.vbguest.auto_update = false
+      end
+      config.vm.guest = :linux
+    end
+  end
+end

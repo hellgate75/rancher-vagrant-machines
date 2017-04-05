@@ -1,0 +1,19 @@
+version: '2'
+
+services:
+    mysql-dev:
+      image: mysql:5.7
+      container_name: mysql-dev
+      volumes:
+        - mysql_dev_data:/var/lib/mysql
+      environment:
+        MYSQL_ROOT_PASSWORD: mysql
+        MYSQL_DATABASE: dev-db
+        MYSQL_USER: dev
+        MYSQL_PASSWORD: dev
+      ports:
+         - "6603:3306"
+volumes:
+    mysql_dev_data:
+      driver: rancher-nfs
+      external: true
