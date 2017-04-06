@@ -16,6 +16,7 @@ VM_HOSTNAME = "rancher-sever"
 VM_MAC_ADDRESS = "022999D56C04"
 VM_NAME = "rancheros-server-0.9.0"
 VM_IP_ADDRESS = "192.168.50.113"
+NETWORK_SERVER_LIST="192.168.50.113,192.168.50.114,192.168.50.115,192.168.50.116"
 #VM_DISK_SIZE_MB = "61440"
 VM_DISK_SIZE_MB = "81920"
 #VM_PORT_BINDING = [[8090, 8080],[8092, 8082]]
@@ -41,6 +42,8 @@ $vm_mac = VM_MAC_ADDRESS or "022999D56C03"
 $vm_name = VM_NAME or "rancheros-server-0.9.0"
 $provider = "virtualbox"
 $ip_address = VM_IP_ADDRESS or "192.168.50.112"
+$network_address = NETWORK_SERVER_LIST or ""
+
 $disk_capacity = VM_DISK_SIZE_MB or "40960"
 $curent_disk_capacity = VM_DISK_DEFAULT_SIZE_MB or "40960"
 $disk_base_name = "box-disk1"
@@ -51,8 +54,7 @@ $vm_synced_folders = VM_SYNCED_FOLDERS or []
 #[[local path, remote path, protocol], ....]
 # In order to enable the sshfs protocol on the guest machine type 'touch .sshfs_enabled' in the vagrant machine folder
 $default_synced_folder_protocol = VM_DEFAULT_SYNCED_PROTOCOL or "rsync"
-$doker_network_0_ip_address="172.17.0.3"
-$doker_network_sys_ip_address="172.18.42.3"
+
 # All Vagrant configuration is done below. The "2" in Vagrant.configure
 # configures the configuration version (we support older styles for
 # backwards compatibility). Please don't change it unless you know what
@@ -115,85 +117,179 @@ Vagrant.configure("2") do |config|
 
     config.vm.provision "shell", run: "always", inline: <<-SHELL
 
-          if [ -z "$(which brctl)" ]; then
-            echo "Installing required packages ..."
-            sudo apt-get update > /dev/null 2>&1 && \
-            sudo apt-get install -y binutils bridge-utils iputils-ping curl wget > /dev/null 2>&1  && \
-            sudo apt-get -y autoremove > /dev/null 2>&1 && \
-            sudo apt-get -y clean > /dev/null 2>&1 && \
-            sudo rm -Rf /var/lib/apt/lists/*
-          fi
-          if [ -z "$(ifconfig -a | grep docker1)" ]; then
-            # echo "Destroying existing docker1 bridged network"
-            # sudo docker network remove shared_nw
-            echo "Cleaning eth1 address ..."
-            IPADDRESS="$(ifconfig eth1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
-            sudo ip addr del $IPADDRESS/24 dev eth1
-            IPADDRESS="#{$ip_address}"
+  if [ -z "$(which brctl)" ]; then
+    echo "Installing required packages ..."
+    sudo apt-get update > /dev/null 2>&1 && \
+    sudo apt-get install -y binutils bridge-utils iputils-ping curl wget > /dev/null 2>&1  && \
+    sudo apt-get -y autoremove > /dev/null 2>&1 && \
+    sudo apt-get -y clean > /dev/null 2>&1 && \
+    sudo rm -Rf /var/lib/apt/lists/*
+  fi
 
-            echo "Creating docker1 bridged network"
-            sudo docker network create \
-                      --driver bridge \
-                      --internal=false \
-                      --subnet=$IPADDRESS/24 \
-                      --gateway=$IPADDRESS \
-                      --opt "com.docker.network.bridge.name"="docker1" \
-                      shared_nw
-            echo "Creating bridge ..."
-            sudo brctl addif docker1 eth1
-            echo "Configuring DHCP in rancher ..."
-            sudo ros config set rancher.network.interfaces.docker1.bridge true
-            sudo ros config set rancher.network.interfaces.docker1.dhcp true
-            echo "Restarting Rancher Network ..."
-            sudo system-docker restart network
-          else
-            IPADDRESS="#{$ip_address}"
-          fi
-          if ! [ -z "$(ifconfig docker0 | grep 'inet 172.17.0.1')" ]; then
-            echo "Refreshing docker0 network ip ..."
-            sudo ip link set dev docker0 down
-            sudo ip addr del 172.17.0.1/16 dev docker0
-            sudo ip addr add #{$doker_network_0_ip_address}/16 dev docker0
-            sudo ip link set dev docker0 up
-            sudo sed -ibkp -e "s/172.17.0.1/#{$doker_network_0_ip_address}/g" /var/lib/docker/network/files/local-kv.db
-            echo "Required restart to apply new docker0 changes, please run : vagrant restart"
-            echo "Restarting RancherOS network"
-            sudo system-docker restart network
-          fi
+  if [ -z "$(ifconfig -a | grep docker1)" ]; then
+    echo "Cleaning eth1 address ..."
+    IPADDRESS="$(ifconfig eth1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+    sudo ip addr del $IPADDRESS/24 dev eth1
+    IPADDRESS="$(ifconfig eth1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+    if ! [ -z "$IPADDRESS" ]; then
+      sudo ip addr del $IPADDRESS/24 dev eth1
+    fi
+    echo "eth1 : $(ifconfig eth1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+    IPADDRESS="#{$ip_address}"
+    ifconfig -a
+    echo "Creating docker1 bridged network"
+    echo "Bridging docker1 on : $IPADDRESS"
+    sudo docker network create \
+              --driver bridge \
+              --internal=false \
+              --subnet=$IPADDRESS/24 \
+              --gateway=$IPADDRESS \
+              --opt "com.docker.network.bridge.name"="docker1" \
+              shared_nw
+    echo "Creating bridge ..."
+    sudo brctl addif docker1 eth1
+    echo "Configuring eth1 docker1 Networks in rancher ..."
+    sudo ros config set rancher.network.interfaces.docker1.address #{$ip_address}
+    sudo ros config set rancher.network.interfaces.docker1.bridge true
+    sudo ros config set rancher.network.interfaces.eth1.address #{$ip_address}
+    echo "Restarting Rancher Network ..."
+    sudo system-docker restart network
+    echo "Status docker1 network ip : $(ifconfig docker1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+  else
+    echo "Restarting Rancher Network ..."
+    sudo system-docker restart network
+    echo "Status docker1 network ip : $(ifconfig docker1 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+    IPADDRESS="#{$ip_address}"
+  fi
 
-          # if ! [ -z "$(ifconfig docker-sys | grep 'inet 172.18.42.2')" ]; then
-          #   echo "Refreshing docker-sys network ip ..."
-          #   ifconfig docker-sys down
-          #   ip addr del 172.18.42.2/16 dev docker-sys
-          #   ip addr add #{$doker_network_sys_ip_address}/16 dev docker-sys
-          #   ifconfig docker-sys up
-          # fi
+  if ! [ -z "$(sudo ros config set rancher.network.interfaces.docker0.address)" ]; then
+    echo "Reporting subnetworks to docker ..."
+    sudo ros config set rancher.network.interfaces.docker0.address $(ifconfig docker0 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')/16
+    sudo ros config set rancher.network.interfaces.docker0.bridge true
+    sudo ros config set rancher.network.interfaces.docker0.post_up ['route add -net 10.42.0.0 netmask 255.255.0.0 dev docker0']
+    echo "Restarting RancherOS network"
+    sudo system-docker restart network
+    echo "Status docker0 network ip : $(ifconfig docker0 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+  else
+    echo "Status docker0 network ip : $(ifconfig docker0 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"
+  fi
 
-          # if ! [ -z "$(sudo strings /var/lib/docker/network/files/local-kv.db | grep 172.17.0.1)" ]; then
-          #   sed -ibkp -e "s/172.17.0.1/#{$doker_network_0_ip_address}/g" /var/lib/docker/network/files/local-kv.db
-          #   # echo "Shutdown to apply new docker0 ip address, please run : vagrant up"
-          #   # sudo poweroff
-          # fi
+  if [ -z "$(sudo ros engine list | grep docker-17.03.0-ce | grep current)" ]; then
+    echo "Set up docker 17.03 CE"
+    sudo ros engine switch docker-17.03.0-ce > /dev/null 2>&1
+    sudo ros config set rancher.docker.bridge docker0
+    sudo ros config set rancher.docker.storage_driver overlay
+    # sudo ros config set rancher.docker.extra_args ["--fixed-cidr=$IPADDRESS2/16","--ip-masq=true"]
+    sudo ros config set rancher.docker.hosts ["127.0.0.1","$IPADDRESS","$IPADDRESS2","$(ifconfig eth0 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')"]
+    sudo system-docker restart docker
+    sleep 10
+    echo "Docker binaries : $(which docker)"
+    echo "Docker version : "
+    docker version
+    echo "Docker info: "
+    docker info
+    echo "Docker logs : "
+    sudo system-docker logs docker
+  fi
 
-          if [ -z "$(docker ps -a | grep rancher-server)" ]; then
-            echo "Define Rancher Server Setup Script ..."
-            sudo rm -f /home/rancher/create-rancher-server.sh
-            echo "#!/bin/bash" > /home/rancher/create-rancher-server.sh
-            echo 'if ! [[ -z \"$(docker ps -a | grep rancher-server)\" ]]; then' >> /home/rancher/create-rancher-server.sh
-            echo "   docker ps -a -q | xargs docker rm -f && docker volume ls -q | xargs docker volume rm" >> /home/rancher/create-rancher-server.sh
-            echo "   sudo rm -Rf /root/rancher-server" >> /home/rancher/create-rancher-server.sh
-            echo "fi" >> /home/rancher/create-rancher-server.sh
-            echo "sudo mkdir -p /root/rancher-server/db-data" >> /home/rancher/create-rancher-server.sh
-            echo "sudo docker run -d --hostname localhost --net host --name rancher-server --privileged --restart=unless-stopped -v /root/rancher-server/db-data:/var/lib/mysql -p 8080:8080 rancher/server" >> /home/rancher/create-rancher-server.sh
-            echo "docker logs -f rancher-server" >> /home/rancher/create-rancher-server.sh
-            sudo chmod 777 /home/rancher/create-rancher-server.sh
-            echo "Rancher Server Installation Script : /home/rancher/create-rancher-server.sh"
-          fi
+  DEFAULT_GATEWAY="$(route|grep default|grep eth0|awk '{FS=OFS=" "}{print $2}'| uniq)"
+  ADDRESSES="#{$network_address}"
+  echo "DEFAULT GATEWAY = $DEFAULT_GATEWAY"
+  echo "DOMAIN ADDRESSES = $ADDRESSES"
+  ROUTES="$(sudo ros config get rancher.network.interfaces.eth0.post_up | sed -e ':a' -e 'N' -e '$!ba' -e 's/\\n/\|/g'  | sed 's/- //g')"
+  if [[ "$ROUTES" =~ '|'$ ]]; then
+    ROUTES="$(echo $ROUTES | sed s'/.$//')"
+  fi
+  IFS=',' ; for i in $ADDRESSES ; do
+    if ! [ -z "$i" ] && ! [ -z "$DEFAULT_GATEWAY" ] && [ -z "$(echo $ROUTES|grep "$i")"]; then
+      echo "Set up routing to $i on gateway $DEFAULT_GATEWAY for device eth0"
+      ROUTES="$ROUTES|ip route add $i via $DEFAULT_GATEWAY dev eth0"
+    fi
+  done
+  ROUTES_COLLECTION=""
+  IFS='|' ; for i in $ROUTES ; do
+    if ! [ -z "$i" ]; then
+      if ! [ -z "$ROUTES_COLLECTION" ]; then
+        ROUTES_COLLECTION="$ROUTES_COLLECTION,\'$i\'"
+      else
+        ROUTES_COLLECTION="\'$i\'"
+      fi
+    fi
+  done
+  echo "Applying route for eth0 : $ROUTES_COLLECTION"
+  /bin/bash -c "sudo ros config set rancher.network.interfaces.eth0.post_up [$ROUTES_COLLECTION]"
+  sudo system-docker restart network
 
-          echo "Removing eth0 address and restarting network"
-          sudo -u root -c 'sleep 10 && ip addr del $(ifconfig eth0 | grep 'inet '|awk 'BEGIN {FS=OFS= " "}{print $2}')/24 dev eth0 && system-docker restart network' &
-          echo "Login the machine with : ssh rancher@$IPADDRESS"
-      SHELL
+if ! [ -e /usr/bin/clear-docker ]; then
+  echo '#!/bin/bash' > /home/rancher/clear-docker
+  echo 'if ! [[ -z "$(docker ps -a)" ]]; then' >> /home/rancher/clear-docker
+  echo '  echo "Cleaning containers ..."' >> /home/rancher/clear-docker
+  echo '  docker ps -a -q | xargs docker rm -f' >> /home/rancher/clear-docker
+  echo 'fi' >> /home/rancher/clear-docker
+  echo 'if ! [[ -z "$(docker volume ls)" ]]; then' >> /home/rancher/clear-docker
+  echo '  echo "Cleaning volumes ..."' >> /home/rancher/clear-docker
+  echo '  docker volume ls -q | xargs docker volume rm' >> /home/rancher/clear-docker
+  echo 'fi' >> /home/rancher/clear-docker
+  sudo chmod 777 /home/rancher/clear-docker
+  sudo mv /home/rancher/clear-docker /usr/bin/clear-docker
+fi
+
+if [ -z "$(docker ps -a | grep rancher-server)" ]; then
+  echo "Define Rancher Server Setup Script ..."
+  sudo rm -f /home/rancher/create-rancher-server.sh
+  echo "#!/bin/bash" > /home/rancher/create-rancher-server.sh
+  echo "sleep 20" >> /home/rancher/create-rancher-server.sh
+  echo 'if ! [[ -z \"$(docker ps -a | grep rancher-server)\" ]]; then' >> /home/rancher/create-rancher-server.sh
+  echo "   docker ps -a -q | xargs docker rm -f && docker volume ls -q | xargs docker volume rm" >> /home/rancher/create-rancher-server.sh
+  echo "   sudo rm -Rf //home/rancher/rancher-server" >> /home/rancher/create-rancher-server.sh
+  echo "fi" >> /home/rancher/create-rancher-server.sh
+  echo "sudo mkdir -p /home/rancher/rancher-server/db-data" >> /home/rancher/create-rancher-server.sh
+  echo "sudo docker run -d --hostname localhost --name rancher-server --privileged --restart=unless-stopped -v /home/rancher/rancher-server/db-data:/var/lib/mysql -p 8080:8080 rancher/server > /home/rancher/rancher-server.log 2>&1" >> /home/rancher/create-rancher-server.sh
+  echo "docker logs -f rancher-server >> /home/rancher/rancher-server.log 2>&1 & " >> /home/rancher/create-rancher-server.sh
+  echo "sudo rm -f /home/rancher/create-rancher-server.sh" >> /home/rancher/create-rancher-server.sh
+  sudo chmod 777 /home/rancher/create-rancher-server.sh
+fi
+
+if [ -z "$(docker ps -a | grep bind)" ]; then
+  echo "Define DNS ..."
+  mkdir -p /home/rancher/bind/etc
+  mkdir -p /home/rancher/bind/zones
+  mkdir -p /home/rancher/bind/webmin
+  docker run -d \
+    -p 53:53 -p 53:53/udp \
+    --restart unless-stopped \
+    --net=host \
+    --privileged \
+    -p 10000:10000 \
+    -v /home/rancher/bind/etc:/etc/bind \
+    -v /home/rancher/bind/zones:/var/lib/bind \
+    -v /home/rancher/bind/webmin:/etc/webmin \
+    -e PASS=newpass \
+    -e "NET=172.17.0.0\;172.18.0.0\;192.168.1.0\;192.168.50.0\;10.1.2.0\;10.2.2.0\;10.3.2.0" \
+    --name bind --hostname bind \
+    cosmicq/docker-bind > /dev/null 2>&1
+fi
+
+echo "Removing eth0 address and restarting network"
+sudo rm -f /home/rancher/restart-net.sh
+echo '#!/bin/bash' > /home/rancher/restart-net.sh
+echo "sudo ip addr del \$(ifconfig eth0 | grep 'inet '|awk 'BEGIN {FS=OFS= \" \"}{print \$2}')/24 dev eth0 > /home/rancher/net.restart.log" >> /home/rancher/restart-net.sh
+echo 'if [[ -z "$(sudo brctl show  | grep docker1 | grep eth1)" ]]; then' >> /home/rancher/restart-net.sh
+echo "   sudo brctl addif docker1 eth1" >> /home/rancher/restart-net.sh
+echo "fi" >> /home/rancher/restart-net.sh
+echo 'sudo system-docker restart network >> /home/rancher/net.restart.log' >> /home/rancher/restart-net.sh
+echo "sudo rm -f /home/rancher/restart-net.sh" >> /home/rancher/restart-net.sh
+sudo chmod 777 /home/rancher/restart-net.sh
+if [ -e /home/rancher/create-rancher-server.sh ]; then
+  echo "Scheduing Rancher Server start-up job ..."
+  /bin/bash -c 'cd /home/rancher && nohup /home/rancher/create-rancher-server.sh &' &
+fi
+echo "Scheduing network restart job ..."
+/bin/bash -c 'cd /home/rancher && /home/rancher/restart-net.sh' &
+echo "Login the machine with : vagrant ssh"
+echo "Login the machine with : ssh rancher@$IPADDRESS"
+
+SHELL
 
     unless Vagrant.has_plugin?('vagrant-hostmanager')
       puts 'vagrant-hostmanager is not installed: no host management provided'
