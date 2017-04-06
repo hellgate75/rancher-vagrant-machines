@@ -196,12 +196,9 @@ Vagrant.configure("2") do |config|
   ADDRESSES="#{$network_address}"
   echo "DEFAULT GATEWAY = $DEFAULT_GATEWAY"
   echo "DOMAIN ADDRESSES = $ADDRESSES"
-  ROUTES="$(sudo ros config get rancher.network.interfaces.eth0.post_up | sed -e ':a' -e 'N' -e '$!ba' -e 's/\\n/\|/g'  | sed 's/- //g')"
-  if [[ "$ROUTES" =~ '|'$ ]]; then
-    ROUTES="$(echo $ROUTES | sed s'/.$//')"
-  fi
+  ROUTES="$(sudo ros config get rancher.network.interfaces.eth0.post_up | sed -e ':a' -e 'N' -e '$!ba' -e 's/\\n/\|/g'  | sed 's/- //g' | sed 's/|$//g')"
   IFS=',' ; for i in $ADDRESSES ; do
-    if ! [ -z "$i" ] && ! [ -z "$DEFAULT_GATEWAY" ] && [ -z "$(echo $ROUTES|grep "$i")"]; then
+    if ! [ -z "$i" ] && ! [ -z "$DEFAULT_GATEWAY" ] && [ -z "$(echo $ROUTES|grep "$i")" ]; then
       echo "Set up routing to $i on gateway $DEFAULT_GATEWAY for device eth0"
       ROUTES="$ROUTES|ip route add $i via $DEFAULT_GATEWAY dev eth0"
     fi
